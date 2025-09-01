@@ -1,0 +1,154 @@
+{
+  "name": "Mix_9050",
+  "created": 9052,
+  "version": "1.0",
+  "tracks": [
+    {
+      "index": 0,
+      "muted": false,
+      "soloed": false,
+      "volume": 1.0,
+      "pan": 0.0,
+      "clips": [
+        {
+          "name": "Cosmic Serenade",
+          "start_time": 0.0,
+          "duration": 291.719977324263,
+          "track_index": 0,
+          "alien_track_name": "Cosmic Serenade"
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "muted": false,
+      "soloed": false,
+      "volume": 1.0,
+      "pan": 0.0,
+      "clips": [
+        {
+          "name": "Aliens_1",
+          "start_time": 0.0,
+          "duration": 47.11997732426304,
+          "track_index": 1,
+          "alien_track_name": "Aliens_1"
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "muted": false,
+      "soloed": false,
+      "volume": 1.0,
+      "pan": 0.0,
+      "clips": []
+    },
+    {
+      "index": 3,
+      "muted": false,
+      "soloed": false,
+      "volume": 1.0,
+      "pan": 0.0,
+      "clips": []
+    },
+    {
+      "index": 4,
+      "muted": false,
+      "soloed": false,
+      "volume": 1.0,
+      "pan": 0.0,
+      "clips": []
+    },
+    {
+      "index": 5,
+      "muted": false,
+      "soloed": false,
+      "volume": 1.0,
+      "pan": 0.0,
+      "clips": []
+    },
+    {
+      "index": 6,
+      "muted": false,
+      "soloed": false,
+      "volume": 1.0,
+      "pan": 0.0,
+      "clips": []
+    },
+    {
+      "index": 7,
+      "muted": false,
+      "soloed": false,
+      "volume": 1.0,
+      "pan": 0.0,
+      "clips": []
+    },
+    {
+      "index": 0,
+      "muted": false,
+      "soloed": false,
+      "volume": 1.0,
+      "pan": 0.0,
+      "clips": []
+    },
+    {
+      "index": 1,
+      "muted": false,
+      "soloed": false,
+      "volume": 1.0,
+      "pan": 0.0,
+      "clips": []
+    },
+    {
+      "index": 2,
+      "muted": false,
+      "soloed": false,
+      "volume": 1.0,
+      "pan": 0.0,
+      "clips": []
+    },
+    {
+      "index": 3,
+      "muted": false,
+      "soloed": false,
+      "volume": 1.0,
+      "pan": 0.0,
+      "clips": []
+    },
+    {
+      "index": 4,
+      "muted": false,
+      "soloed": false,
+      "volume": 1.0,
+      "pan": 0.0,
+      "clips": []
+    },
+    {
+      "index": 5,
+      "muted": false,
+      "soloed": false,
+      "volume": 1.0,
+      "pan": 0.0,
+      "clips": []
+    },
+    {
+      "index": 6,
+      "muted": false,
+      "soloed": false,
+      "volume": 1.0,
+      "pan": 0.0,
+      "clips": []
+    },
+    {
+      "index": 7,
+      "muted": false,
+      "soloed": false,
+      "volume": 1.0,
+      "pan": 0.0,
+      "clips": []
+    }
+  ],
+  "playhead_position": 0.0,
+  "pixels_per_second": 50,
+  "max_duration": 60
+}

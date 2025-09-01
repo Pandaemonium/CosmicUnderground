@@ -1,0 +1,39 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.build/
+dist/
+build/
+
+# Editors/OS
+.DS_Store
+.vscode/
+.idea/
+
+# Virtual envs
+.venv/
+.env/
+
+# Big runtime stuff (not in git)
+runtime/**
+!runtime/config/
+runtime/config/*.toml
+runtime/config/*.json
+
+
+
+# --- Game assets (local machine paths; keep them out of Git) ---
+# We'll reference WAV/PNG via absolute paths in config.py; don't commit large binary assets.
+assets_local/
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.jfif
+*.jpg
+*.jpeg
+*.png
+
+# --- Logs / misc ---
+*.log
