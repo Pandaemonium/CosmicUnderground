@@ -2,15 +2,25 @@ import os, threading, itertools, heapq
 import soundfile as sf
 from typing import Optional, Tuple, Dict, List, Any
 import random
+import threading, traceback
 
 from cosmic_underground.core.config import (
     START_TILE, START_THEME_WAV, MAX_ACTIVE_LOOPS, GEN_WORKERS,
     MAP_W, MAP_H
 )
-from cosmic_underground.core.models import GeneratedLoop, ZoneSpec, WorldModel, POI
+from cosmic_underground.core.models import GeneratedLoop, ZoneSpec, POI
+from cosmic_underground.core.world import WorldModel
 from cosmic_underground.audio.provider import LocalStableAudioProvider
 from cosmic_underground.audio.player import AudioPlayer
 from cosmic_underground.audio.recorder import Recorder
+from cosmic_underground.core.prompts import tokens_for_poi
+
+def _thread_excepthook(args):
+    # Always show where background errors come from
+    print(f"\n[THREAD-ERROR] {args.thread.name}: {args.exc_type.__name__}: {args.exc_value}")
+    traceback.print_tb(args.exc_traceback)
+
+threading.excepthook = _thread_excepthook
 
 class AudioService:
     """
@@ -157,8 +167,10 @@ class AudioService:
                 if src == self.active_source:
                     self.player.play_loop(loop.wav_path, loop.duration_sec, fade_ms=200)
             except Exception as e:
-                rt.error = str(e)
-                print(f"[FATAL][GEN] {src}: {e}", flush=True)
+                rt.error = f"{e.__class__.__name__}: {e}"
+                import traceback
+                print(f"[FATAL][GEN] src={src} in {__file__}::AudioService._worker_loop")
+                traceback.print_exc()  # <-- full file/line stack
             finally:
                 rt.generating = False
             self._prune_cache()

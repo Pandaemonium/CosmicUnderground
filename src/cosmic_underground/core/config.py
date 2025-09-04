@@ -1,3 +1,10 @@
+from pathlib import Path
+
+PKG_ROOT = Path(__file__).resolve().parents[2]               # .../src/cosmic_underground
+ASSETS   = PKG_ROOT.parent / "assets"                        # project/assets
+SPRITES  = ASSETS / "sprites"
+INVENTORY = PKG_ROOT.parent / "inventory" 
+
 # Display / timing
 DEFAULT_FULLSCREEN = True
 FPS = 60
@@ -17,11 +24,11 @@ POIS_OBJ_RANGE = (0, 1)
 # Starting
 START_TILE = (MAP_W // 2, MAP_H // 2)
 START_ZONE_NAME = "Scrapyard Funk"
-START_THEME_WAV  = r"C:\Games\CosmicUnderground\inventory\rec_1756545018_Scrapyard Funk_d5ae11.wav"
+START_THEME_WAV  = str(INVENTORY / "rec_1756545018_Scrapyard Funk_d5ae11.wav")
 
 # Sprites
-PLAYER_SPRITE = r"C:\Games\CosmicUnderground\sprites\character1.png"
-PLAYER_SPRITE_COMPLETE = r"C:\Games\CosmicUnderground\sprites\laser_bunny.png"
+PLAYER_SPRITE = str(SPRITES / "character1.png")
+PLAYER_SPRITE_COMPLETE = str(SPRITES / "laser_bunny.png")
 
 # Generation / cache
 MAX_ACTIVE_LOOPS = 120

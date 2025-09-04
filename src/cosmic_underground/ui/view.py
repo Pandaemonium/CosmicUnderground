@@ -1,8 +1,11 @@
 import math, pygame
 from typing import Dict, List, Tuple, Optional
 from cosmic_underground.core.config import TILE_W, TILE_H
-from cosmic_underground.core.models import POI, WorldModel
-from cosmic_underground.audio import AudioService
+from cosmic_underground.core.models import POI
+from cosmic_underground.core.world import WorldModel
+from cosmic_underground.core import config as C
+
+from cosmic_underground.audio.service import AudioService
 
 class GameView:
     def __init__(self, model: WorldModel, audio: AudioService):
@@ -26,8 +29,8 @@ class GameView:
             "Electro Marsh": "segoe ui",        # modern sans
         }
         
-        self.player_img = self._load_sprite(PLAYER_SPRITE, target_h=48)
-        self.player_img_complete = self._load_sprite(PLAYER_SPRITE_COMPLETE, target_h=48)
+        self.player_img = self._load_sprite(C.PLAYER_SPRITE, target_h=48)
+        self.player_img_complete = self._load_sprite(C.PLAYER_SPRITE_COMPLETE, target_h=48)
         
         # If a family isn’t found, SysFont will pick “best available”.
     def _get_biome_font(self, biome: str, size: int) -> pygame.font.Font:
@@ -85,9 +88,9 @@ class GameView:
         cam_y = self.m.player.py - H/2
 
         min_zx = max(0, int(cam_x // TILE_W) - 1)
-        max_zx = min(MAP_W-1, int((cam_x + W) // TILE_W) + 1)
+        max_zx = min(C.MAP_W-1, int((cam_x + W) // TILE_W) + 1)
         min_zy = max(0, int(cam_y // TILE_H) - 1)
-        max_zy = min(MAP_H-1, int((cam_y + H) // TILE_H) + 1)
+        max_zy = min(C.MAP_H-1, int((cam_y + H) // TILE_H) + 1)
 
         active_k, active_id = self.audio.active_source
         active_tile = None
