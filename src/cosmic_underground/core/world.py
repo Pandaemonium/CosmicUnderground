@@ -4,6 +4,8 @@ from cosmic_underground.core.config import *
 from cosmic_underground.core.mapgen import RegionMap
 from cosmic_underground.core.models import Player
 
+# "I love dancing with my alien friends"
+
 class WorldModel:
     def __init__(self):
         self.world_seed = secrets.randbits(32)
