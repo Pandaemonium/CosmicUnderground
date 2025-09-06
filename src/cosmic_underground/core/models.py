@@ -1,5 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Optional, Tuple, Dict, List
+from cosmic_underground.core.affinity import NPCMind
+import random
 
 @dataclass
 class ZoneSpec:
@@ -53,6 +55,7 @@ class POI:
     loop: Optional[GeneratedLoop] = None
     error: Optional[str] = None
     last_seed: Optional[int] = None
+    mind: NPCMind | None = None
 
 @dataclass
 class Player:

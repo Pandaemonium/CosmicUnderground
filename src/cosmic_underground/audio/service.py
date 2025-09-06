@@ -90,6 +90,10 @@ class AudioService:
 
         # prefetch immediate neighbors
         self._reprioritize_all()
+        
+        self.monitor_mode = "env"   # "env" | "player" | "both" (UI only for now)
+        self.broadcast_on = True    # NPCs hear your player deck if True
+        self.player_track = None    # future: DAW/PlayerDeck sets this; for now None
 
     # ---------- audible source selection ----------
     @staticmethod
@@ -395,3 +399,30 @@ class AudioService:
                 tags=list(set(base.tags + (["fast","layered"] if poi.kind=="npc" else ["retro","soft"]))),
             )
             return self.provider.generate(zspec, prepend=tokens_for_poi(poi))
+    
+    def _loop_tags(self, loop) -> set[str]:
+        # prefer structured tags from provider_meta; fallback to prompt keywords
+        tags = set()
+        if loop and getattr(loop, "provider_meta", None):
+            t = loop.provider_meta.get("tags")
+            if isinstance(t, (list, set, tuple)):
+                tags |= set(str(x).lower() for x in t)
+        if loop and getattr(loop, "prompt", None):
+            # naive: keep simple words
+            for w in str(loop.prompt).lower().split():
+                if w.isalpha() and 3 <= len(w) <= 12:
+                    tags.add(w)
+        return tags
+    
+    def current_env_tags(self) -> set[str]:
+        k, i = self.active_source
+        if k == "zone":
+            zr = self.m.map.zones[i]
+            return self._loop_tags(zr.loop)
+        else:
+            poi = self.m.map.pois[i]
+            return self._loop_tags(poi.loop)
+    
+    def current_player_tags(self) -> set[str]:
+        return self._loop_tags(self.player_track)
+

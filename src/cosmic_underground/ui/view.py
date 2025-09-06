@@ -4,8 +4,8 @@ from cosmic_underground.core.config import TILE_W, TILE_H
 from cosmic_underground.core.models import POI
 from cosmic_underground.core.world import WorldModel
 from cosmic_underground.core import config as C
-
 from cosmic_underground.audio.service import AudioService
+from cosmic_underground.core.affinity import meter_fractions
 
 class GameView:
     def __init__(self, model: WorldModel, audio: AudioService):
@@ -168,6 +168,17 @@ class GameView:
             x = int(cx - (text_w + pad*2)//2)
             y = int(cy + 12)  # below the circle (radius ~10) with small gap
             self._blit_label(screen, poi.name, x, y)
+            
+            if poi.kind == "npc" and getattr(poi, "mind", None):
+                # meter slightly above and to the right
+                mx = cx + 18
+                my = cy - 22
+                aff = getattr(getattr(poi, "mind", None), "disposition", 0.0)
+                self.draw_groove_meter(screen, (mx, my), aff, dots=16, radius=12)
+                
+            
+                # OPTIONAL: swap to dance animation if dancing
+                # Your sprite system can check poi.mind.is_dancing and pick frames.
 
         
         
@@ -308,3 +319,62 @@ class GameView:
                 if (tx+1, ty) not in S: pygame.draw.line(overlay, col, (rx+rw, ry), (rx+rw, ry+rh), width)
                 if (tx, ty+1) not in S: pygame.draw.line(overlay, col, (rx, ry+rh), (rx+rw, ry+rh), width)
                 if (tx-1, ty) not in S: pygame.draw.line(overlay, col, (rx, ry), (rx, ry+rh), width)
+
+    def draw_groove_meter(self, surf, center_xy, affinity, *, dots=16, radius=14):
+        """16-dot ring meter: red/grey for negative, green+purple overlay for positive."""
+        import math, pygame
+        cx, cy = center_xy
+        base_col = (40, 40, 52)
+        red_col  = (240, 80, 80)
+        gry_col  = (160, 160, 172)
+        grn_col  = (90, 220, 120)
+        pur_col  = (180, 120, 255)
+        r = radius
+        dot_r = 3
+
+        # positions
+        pts = []
+        for i in range(dots):
+            th = -math.pi/2 + 2*math.pi * (i / dots)
+            x = int(cx + r * math.cos(th))
+            y = int(cy + r * math.sin(th))
+            pts.append((x,y))
+
+        # base ring
+        for (x,y) in pts:
+            pygame.draw.circle(surf, base_col, (x,y), dot_r)
+
+        # map affinity (-100..200) to fractions
+        def meter_fractions(a: float):
+            a = max(-100.0, min(200.0, float(a)))
+            if a <= -100:  # all red
+                return 1.0, 0.0, 0.0, 0.0
+            if a < 0:     # -50 = 0.5 red + 0.5 grey → 0 red + 1 grey
+                red  = (abs(a) / 100.0)
+                grey = 1.0 - red
+                return red, grey, 0.0, 0.0
+            # a >= 0
+            if a <= 100:  # 0..100 → 0..1 green
+                green = a / 100.0
+                return 0.0, 1.0 - green, green, 0.0
+            # 100..200 → all green plus 0..1 purple overlay
+            purple = (a - 100.0) / 100.0
+            return 0.0, 0.0, 1.0, purple
+
+        red, grey, green, purple = meter_fractions(affinity)
+
+        n_red    = int(round(red    * dots))
+        n_grey   = int(round(grey   * dots))
+        n_green  = int(round(green  * dots))
+        n_purple = int(round(purple * dots))
+
+        if affinity <= 0:
+            for i in range(n_red):
+                pygame.draw.circle(surf, red_col, pts[i], dot_r)
+            for i in range(n_red, min(dots, n_red + n_grey)):
+                pygame.draw.circle(surf, gry_col, pts[i], dot_r)
+        else:
+            for i in range(n_green):
+                pygame.draw.circle(surf, grn_col, pts[i], dot_r)
+            for i in range(n_purple):
+                pygame.draw.circle(surf, pur_col, pts[i], dot_r)

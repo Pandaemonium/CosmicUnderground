@@ -12,6 +12,7 @@ from cosmic_underground.core.world import WorldModel
 from cosmic_underground.audio.service import AudioService
 from cosmic_underground.ui.view import GameView
 from cosmic_underground.minigames.dance.engine import DanceMinigame
+from cosmic_underground.core.affinity import update_npc_affinity, chebyshev
 
 
 def _print_inventory(inv_dir: str = "./inventory") -> None:
@@ -77,6 +78,18 @@ class GameController:
 
     def _adjacent_pois(self) -> List[POI]:
         px, py = self.model.player.tile_x, self.model.player.tile_y
+        dt = self.clock.get_time()
+        
+        # For now, NPCs react to *player* tags only if a player_track exists
+        p_tags = self.audio.current_player_tags()
+        can_emit = self.audio.broadcast_on and bool(p_tags)
+        
+        for poi in self.model.map.pois.values():
+            if poi.kind != "npc" or getattr(poi, "mind", None) is None:
+                continue
+            hear = can_emit and (chebyshev(poi.tile, (px,py)) <= 3)
+            update_npc_affinity(poi.mind, dt, hear, p_tags)
+        
         out: List[POI] = []
         for dx in (-1, 0, 1):
             for dy in (-1, 0, 1):
@@ -219,6 +232,17 @@ class GameController:
                             self.dance.start_for_loop(loop=loop, src_title=title, player=self.audio.player, zone_spec=spec)
                         else:
                             print("[DANCE] No loop ready yet for current source.")
+                    
+                    elif e.key == pygame.K_t:
+                        # cycle monitor mode; UI only for now
+                        modes = ("env","player","both")
+                        i = modes.index(self.audio.monitor_mode) if self.audio.monitor_mode in modes else 0
+                        self.audio.monitor_mode = modes[(i+1) % len(modes)]
+                        print("[Audio] Monitor:", self.audio.monitor_mode)
+                    
+                    elif e.key == pygame.K_b:
+                        self.audio.broadcast_on = not self.audio.broadcast_on
+                        print("[Audio] Broadcast:", "ON" if self.audio.broadcast_on else "OFF")
 
                     elif e.key == pygame.K_f:
                         # Interact with quest giver if adjacent

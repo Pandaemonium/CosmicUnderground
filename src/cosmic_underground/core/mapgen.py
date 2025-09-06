@@ -1,6 +1,7 @@
 from typing import List, Tuple, Dict
 from cosmic_underground.core.models import ZoneRuntime, POI, ZoneSpec
 from cosmic_underground.core.config import *
+from cosmic_underground.core.affinity import NPCMind
 import random
 
 
@@ -202,11 +203,20 @@ class RegionMap:
     
         # Boss in start zone
         for zid, zr in self.zones.items():
-            if (self.START_X, self.START_Y) if hasattr(self, "START_X") else None:  # ignore if not set
+            if (self.START_X, self.START_Y) if hasattr(self, "START_X") else None:
                 pass
             if (self.w//2, self.h//2) in zr.tiles or True:
                 home = interior_tiles(zr)[0]
-                self.pois[next_id] = POI(next_id, "npc", "Boss Skuggs", "boss", home, zid, rarity=10)
+                boss = POI(next_id, "npc", "Boss Skuggs", "boss", home, zid, rarity=10)
+                # >>> ADD MIND HERE <<<
+                z_tags = set(zr.spec.tags) if zr and zr.spec and getattr(zr.spec, "tags", None) else set()
+                if not z_tags:
+                    z_tags = {"funk","retro","talkbox","brassy","mallet","glitch","ambient"}
+                boss.mind = NPCMind(
+                    disposition_base=15,                    # a bit friendly
+                    prefs=set(list(z_tags)[:3])             # quick pick; or random.sample(list(z_tags), k=min(3,len(z_tags)))
+                )
+                self.pois[next_id] = boss
                 self.pois_at[home] = next_id
                 next_id += 1
                 break
@@ -228,7 +238,22 @@ class RegionMap:
                 if not candidates: break
                 tile = candidates.pop(0)
                 name = make_npc_name(rng, zr.spec.species if zr.spec else "Unknown")
-                self.pois[next_id] = POI(next_id, "npc", name, "performer", tile, zid, rarity=rng.randint(0,3))
+            
+                npc = POI(next_id, "npc", name, "performer", tile, zid, rarity=rng.randint(0,3))
+            
+                # >>> ADD MIND HERE <<<
+                z_tags = set(zr.spec.tags) if zr and zr.spec and getattr(zr.spec, "tags", None) else set()
+                if not z_tags:
+                    z_tags = {"funk","retro","glitch","mallet","ambient","talkbox","brassy"}
+                # pick up to 3 prefs from zone tags
+                pick = min(3, len(z_tags))
+                prefs = set(rng.sample(list(z_tags), k=pick)) if pick > 0 else set()
+                npc.mind = NPCMind(
+                    disposition_base=rng.randint(-20, 20),     # initial friendliness
+                    prefs=prefs
+                )
+            
+                self.pois[next_id] = npc
                 self.pois_at[tile] = next_id
                 next_id += 1
     
