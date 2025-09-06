@@ -1,25 +1,32 @@
-﻿# Python
+﻿# venv & tools
+.venv/
+.pytest_cache/
 __pycache__/
-*.py[cod]
-*.egg-info/
-.build/
-dist/
-build/
 
-# Editors/OS
-.DS_Store
+# runtime / generated
+runtime/
+inventory/
+cache/
+outputs/
+mixes/
+*.wav
+*.ogg
+
+# IDE clutter
 .vscode/
 .idea/
+*.code-workspace
 
-# Virtual envs
-.venv/
-.env/
+# build/test
+dist/
+build/
+.eggs/
+*.egg-info/
 
-# Big runtime stuff (not in git)
-runtime/**
-!runtime/config/
-runtime/config/*.toml
-runtime/config/*.json
+# misc
+.DS_Store
+Thumbs.db
+attic/
 
 
 
