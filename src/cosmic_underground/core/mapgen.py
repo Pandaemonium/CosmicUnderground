@@ -264,7 +264,7 @@ class RegionMap:
             
                 # Keep baseline in [-50..+50] so the groove meter mapping works as designed
                 npc.mind = NPCMind(
-                    disposition_base=rng.randint(-20, 40),   # tweak band as you like, but stay within [-50..+50]
+                    disposition_base=rng.randint(50, 100),   # starting disposition
                     prefs=prefs
                 )
             

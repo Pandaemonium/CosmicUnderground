@@ -37,13 +37,15 @@ class BroadcastDJ:
         self._sound: Optional[pygame.mixer.Sound] = None
 
         # Influence tuning
-        self.radius_tiles = 6
+        self.radius_tiles = 3
         self.kw_weight    = 0.7
         self.qual_weight  = 0.3
         self.per_sec_gain = 22.0
         self.per_sec_decay= 6.0
         self.start_thresh = 110
         self.stop_thresh  = 95
+        
+        self.max_music_offset = 25.0  # <-- music can only move ±25 from baseline
 
     # --- library ---
     def load_library(self, songs: List[Song]):
@@ -127,38 +129,51 @@ class BroadcastDJ:
 
     # --- influence ---
     def apply_influence(self, *, world_model, dt_sec: float):
-        if self.state != "playing" or not self.current:
+        if self.state == "stopped" or not self.current:
             self._decay_all(world_model, dt_sec)
             return
-
+    
         px, py = world_model.player.tile_x, world_model.player.tile_y
         song = self.current
-
+    
         for poi in world_model.map.pois.values():
             if poi.kind != "npc":
                 continue
+    
             mind = getattr(poi, "mind", None)
             if mind is None:
                 continue
-
+    
+            # --- compute the allowed band for music movement
+            band_lo, band_hi = self._music_band(mind)
+    
+   
+            # hearing radius
             dx = abs(poi.tile[0] - px)
             dy = abs(poi.tile[1] - py)
             if max(dx, dy) > self.radius_tiles:
-                self._decay_one(poi, dt_sec)
+                self._decay_one(poi, dt_sec)   
                 continue
-
-            kwm  = self._pref_match(song, getattr(mind, "prefs", set()))
-            qual = (float(getattr(song, "base_quality", 0.0)) * 0.5) + 0.5  # -1..1 -> 0..1
-            score = self.kw_weight * kwm + self.qual_weight * qual
-
-            signed = (score - 0.45) * 2.0
-            delta = signed * self.per_sec_gain * dt_sec
-            mind.affinity = max(-100.0, min(200.0, mind.affinity + delta))
-
+    
+            # --- match score (unchanged)
+            kwm  = self._pref_match(song, getattr(mind, "prefs", set()))  # 0..1
+            qual = (song.base_quality or 0.0) * 0.5 + 0.5                 # -1..1 -> 0..1
+            score  = self.kw_weight * kwm + self.qual_weight * qual       # 0..1
+            signed = (score - 0.45) * 2.0                                  # ~[-0.9..+1.1]
+            delta  = signed * self.per_sec_gain * dt_sec
+    
+            # --- apply delta but clamp to ±max_music_offset window around baseline
+            new_aff = mind.affinity + delta
+            new_aff = max(band_lo, min(band_hi, new_aff))  # HARD CAP
+            mind.affinity = new_aff
+            mind.last_match = score
+    
+            # --- dance hysteresis (unchanged)
             if not mind.is_dancing and mind.disposition > self.start_thresh:
                 mind.is_dancing = True
             elif mind.is_dancing and mind.disposition < self.stop_thresh:
                 mind.is_dancing = False
+
 
     def _decay_one(self, poi, dt_sec: float):
         mind = getattr(poi, "mind", None)
@@ -176,3 +191,9 @@ class BroadcastDJ:
         for poi in world_model.map.pois.values():
             if poi.kind == "npc":
                 self._decay_one(poi, dt_sec)
+    
+    def _music_band(self, mind):
+        base = float(mind.disposition_base)      # already in meter space
+        lo = max(-100.0, base - self.max_music_offset)
+        hi = min(200.0, base + self.max_music_offset)
+        return lo, hi
