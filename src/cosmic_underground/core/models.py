@@ -55,7 +55,9 @@ class POI:
     loop: Optional[GeneratedLoop] = None
     error: Optional[str] = None
     last_seed: Optional[int] = None
-    mind: NPCMind | None = None
+    sprite_id: str = "shagdeliac1"
+    mind: NPCMind | None = None    
+    species: Optional[str] = None
 
 @dataclass
 class Player:

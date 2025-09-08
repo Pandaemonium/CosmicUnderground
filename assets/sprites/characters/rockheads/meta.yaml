@@ -1,0 +1,23 @@
+id: rockhead
+species: Rockhead
+authoring_pixel_height: 96           # source art height in px
+engine_scale: 0.5                    # multiply when drawing (lets you author big, display small)
+anchor: [0.5, 1.0]                   # normalized pivot (x,y). (0.5,1.0)=feet center
+shadow_radius: [14, 6]               # optional ground shadow ellipse
+default_direction: S
+
+animations:
+  idle:
+    fps: 6
+    loop: true
+    dirs: [S]                        # add E,N,W later
+  dance:
+    fps: 2
+    loop: true
+    dirs: [S]
+
+layers:                               # optional cosmetic layering
+  order: [base, hat, prop]
+  defaults:
+    hat: null
+    prop: null

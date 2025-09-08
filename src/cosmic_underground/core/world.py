@@ -1,10 +1,26 @@
-from typing import Any, Tuple
+from typing import Any, Tuple, List, Optional
 import secrets
+from dataclasses import dataclass, field
+
 from cosmic_underground.core.config import *
 from cosmic_underground.core.mapgen import RegionMap
 from cosmic_underground.core.models import Player
+from cosmic_underground.core.music import Song
 
 # "I love dancing with my alien friends"
+
+@dataclass
+class Player:
+    tile_x: int
+    tile_y: int
+    px: float
+    py: float
+    speed: float = 6.0
+    # NEW
+    inventory_songs: List[Song] = field(default_factory=list)
+    broadcast_index: Optional[int] = None    # which song
+    broadcasting: bool = False
+
 
 class WorldModel:
     def __init__(self):
@@ -14,6 +30,23 @@ class WorldModel:
         sx, sy = START_TILE
         self.player = Player(sx, sy, sx*TILE_W + TILE_W/2, sy*TILE_H + TILE_H/2, speed=6.0)
         self.current_zone_id = self.map.zone_of[sx][sy]
+        
+        self.player.inventory_songs = [
+            Song(
+                title="Drippy",
+                wav_path=r"C:\Games\CosmicUnderground\assets\audio\surface\Drippy (1).wav",
+                keywords=Song.kw(["funk","brassy","parade","retro"]),
+                base_quality=+0.3,
+            ),
+            Song(
+                title="Galactic Groove",
+                wav_path=r"C:\Games\CosmicUnderground\assets\audio\surface\Galactic Groove.wav",
+                keywords=Song.kw(["ambient","mallets","glassy"]),
+                base_quality=-0.1,
+            ),
+        ]
+        self.player.broadcast_index = 0   # start selected but not playing
+        self.player.broadcasting = False
 
         # runtime flags/context
         self.time_of_day = "night"

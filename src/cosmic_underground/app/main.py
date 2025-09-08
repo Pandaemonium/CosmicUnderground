@@ -16,9 +16,11 @@ def main():
             pass
 
 if __name__ == "__main__":
-    import sys, traceback
+    import sys, traceback, faulthandler
+    faulthandler.enable() 
     try:
-        main()
-    except Exception:
+        GameController().run()
+    except Exception as e:
         traceback.print_exc()   # <-- shows which module/line failed
+        print("Fatal error:", e)
         sys.exit(1)

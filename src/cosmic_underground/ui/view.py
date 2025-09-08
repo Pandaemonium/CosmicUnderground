@@ -1,11 +1,22 @@
-import math, pygame
+import os, math, pygame
 from typing import Dict, List, Tuple, Optional
+from dataclasses import dataclass
+
 from cosmic_underground.core.config import TILE_W, TILE_H
 from cosmic_underground.core.models import POI
 from cosmic_underground.core.world import WorldModel
 from cosmic_underground.core import config as C
 from cosmic_underground.audio.service import AudioService
-from cosmic_underground.core.affinity import meter_fractions
+from cosmic_underground.core.affinity import meter_fractions, _filled_wedge
+
+@dataclass
+class CharacterAnim:
+    idle: list    # List[pygame.Surface]
+    dance: list   # List[pygame.Surface]
+    fps_idle: float = 6.0
+    fps_dance: float = 2.0
+    offset_y: int = 6   # raise sprite a little so it “sits” on the tile
+
 
 class GameView:
     def __init__(self, model: WorldModel, audio: AudioService):
@@ -31,6 +42,26 @@ class GameView:
         
         self.player_img = self._load_sprite(C.PLAYER_SPRITE, target_h=48)
         self.player_img_complete = self._load_sprite(C.PLAYER_SPRITE_COMPLETE, target_h=48)
+        
+        
+        
+        # Choose a path that exists in your repo; try relative first, fall back to your absolute
+        npc_base = os.path.join("assets", "sprites", "characters", "shagdeliac1")
+        if not os.path.isdir(npc_base):
+            npc_base = r"C:\Games\CosmicUnderground\assets\sprites\characters\shagdeliac1"
+        self.npc_anim = self._load_character_anim(npc_base, target_h=42)
+
+        self.default_species_key = "shagdeliac1"   # fallback
+        self.anim_cache: dict[str, CharacterAnim] = {}
+        
+        # music widget hitboxes
+        self._mw_rects = {
+            "env_toggle": pygame.Rect(0,0,0,0),
+            "dj_toggle":  pygame.Rect(0,0,0,0),
+            "dj_prev":    pygame.Rect(0,0,0,0),
+            "dj_next":    pygame.Rect(0,0,0,0),
+            "mode_cycle": pygame.Rect(0,0,0,0),
+        }
         
         # If a family isn’t found, SysFont will pick “best available”.
     def _get_biome_font(self, biome: str, size: int) -> pygame.font.Font:
@@ -131,9 +162,30 @@ class GameView:
                     poi = self.m.map.pois[pid]
                     cx = rect.centerx; cy = rect.centery
                     visible_pois.append((poi, cx, cy))
-                    # simple marker (we'll do glow in overlay pass)
-                    color = (255,220,90) if poi.name=="Boss Skuggs" else ((200,255,200) if poi.kind=="npc" else (200,200,255))
-                    pygame.draw.circle(screen, color, (cx, cy), 10)
+                    # sprite (NPC) or simple circle (objects)
+                    if poi.kind == "npc":
+                        # Get species either from the POI or from the zone spec
+                        species = getattr(poi, "species", None)
+                        if not species:
+                            species = self.m.map.zones[poi.zone_id].spec.species if poi.zone_id in self.m.map.zones else None
+                    
+                        anim = self._get_anim_for_species(species, target_h=42)
+                    
+                        is_dancing = bool(getattr(getattr(poi, "mind", None), "is_dancing", False))
+                        frames = anim.dance if is_dancing else anim.idle
+                        fps    = anim.fps_dance if is_dancing else anim.fps_idle
+                        frame  = self._anim_frame(frames, fps)
+                    
+                        if frame:
+                            img_rect = frame.get_rect(center=(cx, cy - anim.offset_y))
+                            screen.blit(frame, img_rect.topleft)
+                        else:
+                            # fallback if frames didn’t load
+                            pygame.draw.circle(screen, (200,255,200), (cx, cy), 10)
+                    else:
+                        # objects (non-NPC) marker for now
+                        color = (255,220,90) if poi.name=="Boss Skuggs" else (200,200,255)
+                        pygame.draw.circle(screen, color, (cx, cy), 10)
         
         # --- 2) FX overlay (zone perimeter + beacon glow), then blit once ---
         overlay = pygame.Surface((W, H), pygame.SRCALPHA)
@@ -174,7 +226,7 @@ class GameView:
                 mx = cx + 18
                 my = cy - 22
                 aff = getattr(getattr(poi, "mind", None), "disposition", 0.0)
-                self.draw_groove_meter(screen, (mx, my), aff, dots=16, radius=12)
+                self.draw_groove_meter(screen, (mx, my), poi.mind.disposition, radius=12)
                 
             
                 # OPTIONAL: swap to dance animation if dancing
@@ -320,61 +372,202 @@ class GameView:
                 if (tx, ty+1) not in S: pygame.draw.line(overlay, col, (rx, ry+rh), (rx+rw, ry+rh), width)
                 if (tx-1, ty) not in S: pygame.draw.line(overlay, col, (rx, ry), (rx, ry+rh), width)
 
-    def draw_groove_meter(self, surf, center_xy, affinity, *, dots=16, radius=14):
-        """16-dot ring meter: red/grey for negative, green+purple overlay for positive."""
-        import math, pygame
+    def draw_groove_meter(self, surf: pygame.Surface, center_xy: tuple[int,int], affinity: int,
+                          radius: int = 12, start_at_top: bool = True):
+        """
+        Filled circle meter that partitions 360° among red/grey/green/purple.
+        Visual rules:
+          • Negative:   red wedge first, remainder grey.
+          • Positive:   green wedge first; purple overlays from the start; remainder grey.
+        Always begins at top (-90°) by default so it looks like a “progress dial”.
+        """
         cx, cy = center_xy
-        base_col = (40, 40, 52)
-        red_col  = (240, 80, 80)
-        gry_col  = (160, 160, 172)
-        grn_col  = (90, 220, 120)
+        base_col = (42, 44, 56)   # faint base behind everything (optional)
+        red_col  = (240,  80,  80)
+        gry_col  = (165, 168, 178)
+        grn_col  = ( 90, 220, 120)
         pur_col  = (180, 120, 255)
-        r = radius
-        dot_r = 3
-
-        # positions
-        pts = []
-        for i in range(dots):
-            th = -math.pi/2 + 2*math.pi * (i / dots)
-            x = int(cx + r * math.cos(th))
-            y = int(cy + r * math.sin(th))
-            pts.append((x,y))
-
-        # base ring
-        for (x,y) in pts:
-            pygame.draw.circle(surf, base_col, (x,y), dot_r)
-
-        # map affinity (-100..200) to fractions
-        def meter_fractions(a: float):
-            a = max(-100.0, min(200.0, float(a)))
-            if a <= -100:  # all red
-                return 1.0, 0.0, 0.0, 0.0
-            if a < 0:     # -50 = 0.5 red + 0.5 grey → 0 red + 1 grey
-                red  = (abs(a) / 100.0)
-                grey = 1.0 - red
-                return red, grey, 0.0, 0.0
-            # a >= 0
-            if a <= 100:  # 0..100 → 0..1 green
-                green = a / 100.0
-                return 0.0, 1.0 - green, green, 0.0
-            # 100..200 → all green plus 0..1 purple overlay
-            purple = (a - 100.0) / 100.0
-            return 0.0, 0.0, 1.0, purple
-
+    
+        # Background (keeps a “full circle” look even at 0)
+        pygame.draw.circle(surf, base_col, (cx, cy), radius)
+    
         red, grey, green, purple = meter_fractions(affinity)
-
-        n_red    = int(round(red    * dots))
-        n_grey   = int(round(grey   * dots))
-        n_green  = int(round(green  * dots))
-        n_purple = int(round(purple * dots))
-
+        total = 360.0
+        zero = -90.0 if start_at_top else 0.0  # start angle
+    
+        # Helper to draw a fraction wedge and advance the angle
+        def take(color, frac, angle0):
+            sweep = total * max(0.0, min(1.0, frac))
+            if sweep > 0:
+                _filled_wedge(surf, (cx, cy), radius, angle0, sweep, color)
+            return angle0 + sweep
+    
+        # NEGATIVE path: red first, then grey
         if affinity <= 0:
-            for i in range(n_red):
-                pygame.draw.circle(surf, red_col, pts[i], dot_r)
-            for i in range(n_red, min(dots, n_red + n_grey)):
-                pygame.draw.circle(surf, gry_col, pts[i], dot_r)
+            ang = zero
+            ang = take(red_col,  red,  ang)
+            ang = take(gry_col,  grey, ang)
+            # (green/purple are zero by definition here)
+    
+        # POSITIVE path: draw green, overlay purple from the start, then grey remainder
         else:
-            for i in range(n_green):
-                pygame.draw.circle(surf, grn_col, pts[i], dot_r)
-            for i in range(n_purple):
-                pygame.draw.circle(surf, pur_col, pts[i], dot_r)
+            # First paint the “base” proportions (green + grey)
+            ang = zero
+            ang = take(grn_col,  green, ang)
+            ang = take(gry_col,  grey,  ang)
+            # Then overlay purple FROM THE START for the “love” portion
+            # (so the earliest sector becomes purple as love increases)
+            if purple > 0.0:
+                _filled_wedge(surf, (cx, cy), radius, zero, total * purple, pur_col)
+    
+        # Optional crisp outline
+        pygame.draw.circle(surf, (210, 210, 220), (cx, cy), radius, width=1)
+
+    def draw_music_widget(self, screen: pygame.Surface, audio):
+        W, H = screen.get_size()
+        pad = 8
+        box_w, box_h = 360, 128
+        x = W - box_w - 12
+        y = 12
+
+        # panel
+        panel = pygame.Surface((box_w, box_h), pygame.SRCALPHA)
+        pygame.draw.rect(panel, (20, 18, 28, 200), panel.get_rect(), border_radius=10)
+        pygame.draw.rect(panel, (160,120,255, 230), panel.get_rect(), width=2, border_radius=10)
+
+        title_font = self.font
+        small = self.small
+
+        # header: listen mode + cycle button
+        mode_txt = f"Listen: {audio.listen_mode.upper()}"
+        mt = title_font.render(mode_txt, True, (235,235,255))
+        panel.blit(mt, (pad, pad))
+        # small cycle button
+        cyc = pygame.Rect(box_w - 70 - pad, pad, 70, 22)
+        pygame.draw.rect(panel, (50,45,65), cyc, border_radius=6)
+        pygame.draw.rect(panel, (200,160,255), cyc, width=1, border_radius=6)
+        label = small.render("cycle (T)", True, (230,230,240))
+        panel.blit(label, label.get_rect(center=cyc.center))
+        self._mw_rects["mode_cycle"] = pygame.Rect(x + cyc.x, y + cyc.y, cyc.w, cyc.h)
+
+        line_y = pad + 28
+
+        # ENV row
+        env_name = audio.env_title()
+        env_state = "paused" if audio.env_paused else "playing"
+        env_line = small.render(f"ENV: {env_name}", True, (210,210,240))
+        panel.blit(env_line, (pad, line_y))
+
+        btn = pygame.Rect(box_w - 80 - pad, line_y - 2, 80, 22)
+        pygame.draw.rect(panel, (45,55,75), btn, border_radius=6)
+        pygame.draw.rect(panel, (140,160,220), btn, width=1, border_radius=6)
+        btn_label = small.render("Pause" if env_state=="playing" else "Play", True, (230,230,240))
+        panel.blit(btn_label, btn_label.get_rect(center=btn.center))
+        self._mw_rects["env_toggle"] = pygame.Rect(x + btn.x, y + btn.y, btn.w, btn.h)
+
+        line_y += 28
+
+        # DJ row
+        dj_name = audio.broadcast_title()
+        dj_state = getattr(audio.broadcast, "state", "stopped") if getattr(audio, "broadcast", None) else "stopped"
+        dj_line = small.render(f"DJ : {dj_name}", True, (210,210,240))
+        panel.blit(dj_line, (pad, line_y))
+
+        # prev / toggle / next buttons
+        bx = box_w - 3*64 - pad - 6
+        def draw_btn(px, text):
+            r = pygame.Rect(px, line_y - 2, 60, 22)
+            pygame.draw.rect(panel, (45,55,75), r, border_radius=6)
+            pygame.draw.rect(panel, (140,160,220), r, width=1, border_radius=6)
+            t = small.render(text, True, (230,230,240))
+            panel.blit(t, t.get_rect(center=r.center))
+            return r
+
+        r_prev = draw_btn(bx, "◀")
+        r_tog  = draw_btn(bx + 64, "Pause" if dj_state=="playing" else "Play")
+        r_next = draw_btn(bx + 128, "▶")
+
+        self._mw_rects["dj_prev"]   = pygame.Rect(x + r_prev.x, y + r_prev.y, r_prev.w, r_prev.h)
+        self._mw_rects["dj_toggle"] = pygame.Rect(x + r_tog.x,  y + r_tog.y,  r_tog.w,  r_tog.h)
+        self._mw_rects["dj_next"]   = pygame.Rect(x + r_next.x, y + r_next.y, r_next.w, r_next.h)
+
+        screen.blit(panel, (x, y))
+
+    def handle_music_widget_click(self, pos, audio):
+        x, y = pos
+        r = self._mw_rects
+        if r["mode_cycle"].collidepoint(x, y):
+            audio.toggle_listen_mode()
+            return
+        if r["env_toggle"].collidepoint(x, y):
+            audio.toggle_env_pause()
+            return
+        if r["dj_toggle"].collidepoint(x, y):
+            audio.toggle_broadcast_pause()
+            return
+        if r["dj_prev"].collidepoint(x, y):
+            audio.cycle_broadcast(-1)
+            return
+        if r["dj_next"].collidepoint(x, y):
+            audio.cycle_broadcast(+1)
+            return
+        
+    def _load_frames_from_dir(self, folder: str, target_h: int) -> list[pygame.Surface]:
+        """Load and scale all .png/.webp frames from a directory."""
+        frames = []
+        if not os.path.isdir(folder):
+            return frames
+        for fn in sorted(os.listdir(folder)):
+            if not fn.lower().endswith((".png", ".webp")):
+                continue
+            path = os.path.join(folder, fn)
+            try:
+                img = pygame.image.load(path).convert_alpha()
+            except Exception:
+                continue
+            w, h = img.get_size()
+            if h != target_h:
+                scale = target_h / float(h)
+                img = pygame.transform.smoothscale(img, (int(w*scale), target_h))
+            frames.append(img)
+        return frames
+
+    def _load_character_anim(self, base_dir: str, target_h: int = 42) -> CharacterAnim:
+        """Load idle/dance subfolders; return a CharacterAnim (empty lists ok)."""
+        idle_dir  = os.path.join(base_dir, "idle")
+        dance_dir = os.path.join(base_dir, "dance")
+        idle_frames  = self._load_frames_from_dir(idle_dir,  target_h)
+        dance_frames = self._load_frames_from_dir(dance_dir, target_h)
+        return CharacterAnim(idle=idle_frames, dance=dance_frames)
+
+    def _anim_frame(self, frames: list[pygame.Surface], fps: float) -> pygame.Surface | None:
+        """Pick a frame by time; returns None if no frames."""
+        if not frames:
+            return None
+        t = pygame.time.get_ticks() / 1000.0
+        idx = int(t * max(0.1, fps)) % len(frames)
+        return frames[idx]
+
+    def _species_key(self, name: str | None) -> str:
+        if not name:
+            return self.default_species_key
+        # normalize: lowercase, remove non-alnum/space, spaces->underscore
+        key = "".join(ch for ch in name.lower() if ch.isalnum() or ch == " ")
+        key = key.strip().replace(" ", "_")
+        return key or self.default_species_key
+
+    def _get_anim_for_species(self, species_name: str | None, target_h: int = 42) -> CharacterAnim:
+        key = self._species_key(species_name)
+        if key in self.anim_cache:
+            return self.anim_cache[key]
+
+        # try species pack
+        base = os.path.join("assets", "sprites", "characters", key)
+        if not os.path.isdir(base):
+            # fallback to default pack
+            base = os.path.join("assets", "sprites", "characters", self.default_species_key)
+
+        anim = self._load_character_anim(base, target_h=target_h)
+        # if even fallback is empty, anim.idle/dance may be []; that’s okay (we’ll draw a circle)
+        self.anim_cache[key] = anim
+        return anim

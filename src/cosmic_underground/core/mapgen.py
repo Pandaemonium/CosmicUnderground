@@ -235,21 +235,36 @@ class RegionMap:
     
             # NPCs
             for _ in range(npc_n):
-                if not candidates: break
+                if not candidates:
+                    break
                 tile = candidates.pop(0)
-                name = make_npc_name(rng, zr.spec.species if zr.spec else "Unknown")
             
-                npc = POI(next_id, "npc", name, "performer", tile, zid, rarity=rng.randint(0,3))
+                species = zr.spec.species if (zr and zr.spec) else "Unknown"
+                name = make_npc_name(rng, species)
             
-                # >>> ADD MIND HERE <<<
-                z_tags = set(zr.spec.tags) if zr and zr.spec and getattr(zr.spec, "tags", None) else set()
+                # Create the POI and record species so we can load the right sprite pack later
+                npc = POI(
+                    next_id,
+                    "npc",
+                    name,
+                    "performer",
+                    tile,
+                    zid,
+                    rarity=rng.randint(0, 3),
+                    species=species,          # ← NEW: stash species on the POI
+                    # sprite_key=optional_variant_key,   # (optional) if you add per-species variants later
+                )
+            
+                # --- preferences + starting disposition ---
+                # zone tags → prefs (pick up to 3)
+                z_tags = set(getattr(zr.spec, "tags", []) or [])
                 if not z_tags:
-                    z_tags = {"funk","retro","glitch","mallet","ambient","talkbox","brassy"}
-                # pick up to 3 prefs from zone tags
-                pick = min(3, len(z_tags))
-                prefs = set(rng.sample(list(z_tags), k=pick)) if pick > 0 else set()
+                    z_tags = {"funk", "retro", "glitch", "mallet", "ambient", "talkbox", "brassy"}
+                prefs = set(rng.sample(sorted(z_tags), k=min(3, len(z_tags))))
+            
+                # Keep baseline in [-50..+50] so the groove meter mapping works as designed
                 npc.mind = NPCMind(
-                    disposition_base=rng.randint(-20, 20),     # initial friendliness
+                    disposition_base=rng.randint(-20, 40),   # tweak band as you like, but stay within [-50..+50]
                     prefs=prefs
                 )
             

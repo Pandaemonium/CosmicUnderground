@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 import random
 from typing import List
-
+import time
 import pygame
 
 from cosmic_underground.core import config as C
@@ -152,6 +152,9 @@ class GameController:
                 if e.type == pygame.QUIT:
                     running = False
                     continue
+                
+                if e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
+                    self.view.handle_music_widget_click(e.pos, self.audio)
 
                 # ---- DANCE MODE ----
                 if self.mode == "dance":
@@ -234,15 +237,42 @@ class GameController:
                             print("[DANCE] No loop ready yet for current source.")
                     
                     elif e.key == pygame.K_t:
-                        # cycle monitor mode; UI only for now
-                        modes = ("env","player","both")
-                        i = modes.index(self.audio.monitor_mode) if self.audio.monitor_mode in modes else 0
-                        self.audio.monitor_mode = modes[(i+1) % len(modes)]
-                        print("[Audio] Monitor:", self.audio.monitor_mode)
+                        # cycle env → player → both
+                        self.audio.toggle_listen_mode()
+                        print("[Mix] mode:", self.audio.listen_mode)
+                        continue
                     
                     elif e.key == pygame.K_b:
-                        self.audio.broadcast_on = not self.audio.broadcast_on
-                        print("[Audio] Broadcast:", "ON" if self.audio.broadcast_on else "OFF")
+                        # toggle broadcast on/off (using currently selected index)
+                        pl = self.model.player
+                        if pl.broadcasting:
+                            self.audio.stop_broadcast()
+                            pl.broadcasting = False
+                        else:
+                            if pl.broadcast_index is not None and 0 <= pl.broadcast_index < len(pl.inventory_songs):
+                                song = pl.inventory_songs[pl.broadcast_index]
+                                self.audio.start_broadcast(song)
+                                pl.broadcasting = True
+                    
+                    elif e.key == pygame.K_0:
+                        self.audio.stop_broadcast()
+                        self.model.player.broadcasting = False
+                    
+                    elif e.key in (pygame.K_1, pygame.K_2):
+                        slot = 0 if e.key == pygame.K_1 else 1
+                        pl = self.model.player
+                        if slot < len(pl.inventory_songs):
+                            pl.broadcast_index = slot
+                            if pl.broadcasting:
+                                self.audio.start_broadcast(pl.inventory_songs[slot])  # seamless swap
+                    
+                    elif e.key == pygame.K_LEFTBRACKET:
+                        v = self.audio.broadcast.volume - 0.05
+                        self.audio.broadcast.set_volume(v)
+                    
+                    elif e.key == pygame.K_RIGHTBRACKET:
+                        v = self.audio.broadcast.volume + 0.05
+                        self.audio.broadcast.set_volume(v)
 
                     elif e.key == pygame.K_f:
                         # Interact with quest giver if adjacent
@@ -341,6 +371,17 @@ class GameController:
                 self.clock.tick(C.FPS)
                 continue
 
+            if self.mode != "dance":
+                dt_sec = self.clock.get_time() / 1000.0
+                # run influence regardless; it decays when disabled
+                self.audio.broadcast.apply_influence(world_model=self.model, dt_sec=dt_sec)
+
+            # per-frame broadcast influence
+            dt_ms = self.clock.get_time()
+            dt_sec = dt_ms / 1000.0
+            if getattr(self.audio, "broadcast", None):
+                self.audio.broadcast.apply_influence(world_model=self.model, dt_sec=dt_sec)
+
             # Overworld draw
             self.view.draw(
                 self.screen,
@@ -349,8 +390,11 @@ class GameController:
                 self.show_prompt,
                 self.prompt_text,
                 self.show_quest,
-                self.quest_text,
+                self.quest_text,               
             )
+
+            # draw top-right music widget
+            self.view.draw_music_widget(self.screen, self.audio)
 
             pygame.display.flip()
             self.clock.tick(C.FPS)

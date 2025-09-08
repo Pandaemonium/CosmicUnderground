@@ -3,6 +3,7 @@ import soundfile as sf
 from typing import Optional, Tuple, Dict, List, Any
 import random
 import threading, traceback
+import pygame
 
 from cosmic_underground.core.config import (
     START_TILE, START_THEME_WAV, MAX_ACTIVE_LOOPS, GEN_WORKERS,
@@ -14,6 +15,8 @@ from cosmic_underground.audio.provider import LocalStableAudioProvider
 from cosmic_underground.audio.player import AudioPlayer
 from cosmic_underground.audio.recorder import Recorder
 from cosmic_underground.core.prompts import tokens_for_poi
+from cosmic_underground.audio.broadcast import BroadcastDJ
+from cosmic_underground.core.music import Song
 
 def _thread_excepthook(args):
     # Always show where background errors come from
@@ -32,6 +35,17 @@ class AudioService:
     """
     def __init__(self, model: WorldModel):
         self.m = model
+        
+        # --- listen mix (what the player hears) ---
+        self.listen_mode = "env"         # "env" | "player" | "both"
+        self.env_paused = False          # track pause state for env stream
+        # initial volumes for each mode (tweak or move to config)
+        self._vol_env_only   = 1.0
+        self._vol_dj_only    = 1.0
+        self._vol_both_env   = 0.80
+        self._vol_both_dj    = 0.80
+        
+        
         # context → promptgen
         def _ctx():
             return dict(
@@ -64,6 +78,7 @@ class AudioService:
         rt0 = self._get_runtime(self.active_source)
         if rt0.loop:
             self.player.play_loop(rt0.loop.wav_path, rt0.loop.duration_sec, fade_ms=140)
+            self._on_env_playback_changed()
         else:
             # try preload for start zone, fall back to generate
             if not self._maybe_preload_start_zone():
@@ -94,6 +109,10 @@ class AudioService:
         self.monitor_mode = "env"   # "env" | "player" | "both" (UI only for now)
         self.broadcast_on = True    # NPCs hear your player deck if True
         self.player_track = None    # future: DAW/PlayerDeck sets this; for now None
+        self.broadcast = BroadcastDJ(mixer_channel=3)
+        self.broadcast.set_volume(0.8)
+        
+
 
     # ---------- audible source selection ----------
     @staticmethod
@@ -125,12 +144,14 @@ class AudioService:
             zr = self.m.map.zones[idv]
             if zr.loop:
                 self.player.play_loop(zr.loop.wav_path, zr.loop.duration_sec, cross_ms=220)
+                self._on_env_playback_changed()
             else:
                 self.request_zone(idv, priority=(0,0), force=True)
         else:
             poi = self.m.map.pois[idv]
             if poi.loop:
                 self.player.play_loop(poi.loop.wav_path, poi.loop.duration_sec, cross_ms=220)
+                self._on_env_playback_changed()
             else:
                 self.request_poi(idv, priority=(0,0), force=True)
 
@@ -170,6 +191,7 @@ class AudioService:
                 # if the thing we just generated is the *currently audible* source, play it now
                 if src == self.active_source:
                     self.player.play_loop(loop.wav_path, loop.duration_sec, fade_ms=200)
+                    self._on_env_playback_changed()
             except Exception as e:
                 rt.error = f"{e.__class__.__name__}: {e}"
                 import traceback
@@ -311,6 +333,7 @@ class AudioService:
         z.loop = GeneratedLoop(path, duration, z.spec.bpm, z.spec.key_mode, f"Preloaded theme: {z.spec.name}", {"backend":"preloaded"})
         if self.active_source == ("zone", zid):
             self.player.play_loop(z.loop.wav_path, z.loop.duration_sec, cross_ms=180)
+            self._on_env_playback_changed()
 
     def _maybe_preload_start_zone(self) -> bool:
         k, i = self.active_source
@@ -425,4 +448,94 @@ class AudioService:
     
     def current_player_tags(self) -> set[str]:
         return self._loop_tags(self.player_track)
+    
+    def start_broadcast(self, song):
+        self.broadcast.play(song)
 
+    def stop_broadcast(self):
+        self.broadcast.stop()
+
+    def toggle_broadcast(self):
+        self.broadcast.toggle()
+
+    # ===== listen/mix control =====
+    def set_listen_mode(self, mode: str):
+        if mode not in ("env", "player", "both"):
+            return
+        self.listen_mode = mode
+        self._apply_listen_mix()
+
+    def toggle_listen_mode(self):
+        order = ("env", "player", "both")
+        i = order.index(self.listen_mode)
+        self.set_listen_mode(order[(i + 1) % len(order)])
+
+    def _apply_listen_mix(self):
+        # environment (pygame.mixer.music)
+        if self.listen_mode == "env":
+            pygame.mixer.music.set_volume(self._vol_env_only)
+            if hasattr(self, "broadcast") and self.broadcast:
+                self.broadcast.set_volume(0.0)
+        elif self.listen_mode == "player":
+            pygame.mixer.music.set_volume(0.0)
+            if hasattr(self, "broadcast") and self.broadcast:
+                self.broadcast.set_volume(self._vol_dj_only)
+        else:  # both
+            pygame.mixer.music.set_volume(self._vol_both_env)
+            if hasattr(self, "broadcast") and self.broadcast:
+                self.broadcast.set_volume(self._vol_both_dj)
+
+    # call this whenever you start/restart env playback
+    def _on_env_playback_changed(self):
+        self._apply_listen_mix()
+
+    # ===== env pause/resume =====
+    def pause_env(self):
+        try:
+            pygame.mixer.music.pause()
+            self.env_paused = True
+        except Exception:
+            pass
+
+    def resume_env(self):
+        try:
+            pygame.mixer.music.unpause()
+            self.env_paused = False
+        except Exception:
+            pass
+
+    def toggle_env_pause(self):
+        if self.env_paused:
+            self.resume_env()
+        else:
+            self.pause_env()
+
+    def env_title(self) -> str:
+        k, i = self.active_source
+        if k == "zone":
+            return self.m.map.zones[i].spec.name if self.m.map.zones[i].spec else "Zone"
+        else:
+            return self.m.map.pois[i].name
+
+    # ===== broadcast helpers for UI =====
+    def broadcast_title(self) -> str:
+        if self.broadcast and self.broadcast.current:
+            return getattr(self.broadcast.current, "title", "(untitled)")
+        return "—"
+
+    def toggle_broadcast_pause(self):
+        if not self.broadcast:
+            return
+        if self.broadcast.state == "paused":
+            self.broadcast.resume()
+        elif self.broadcast.state == "playing":
+            self.broadcast.pause()
+
+    def cycle_broadcast(self, step: int = +1):
+        """Switch to next/prev song in the library and start it (if enabled)."""
+        if not self.broadcast or not self.broadcast.library:
+            return
+        self.broadcast.select_relative(step)
+        if self.broadcast_enabled:
+            self.broadcast.play(self.broadcast.library[self.broadcast.sel_index])
+            self._apply_listen_mix()

@@ -2,6 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Set, Tuple
 import math
+import pygame
 
 # -------- Public API --------
 
@@ -50,36 +51,65 @@ def update_npc_affinity(mind: "NPCMind", dt_ms: int, can_hear: bool, play_tags: 
 
 # -------- Meter math (your exact mapping) --------
 
-def meter_fractions(affinity: float) -> tuple[float,float,float,float]:
+def meter_fractions(affinity: int) -> tuple[float,float,float,float]:
     """
-    Return (red, grey, green, purple) fill fractions 0..1 for the 16-dot ring.
-
-    Mapping requested:
-      -100 => all red
-       -50 => 0.5 red, 0.5 grey
-         0 => all grey
-        25 => 0.25 green
-       100 => all green
-       150 => 1.0 green base + 0.5 purple overlay
-       200 => all purple overlay
+    Map affinity [-100..200] -> (red, grey, green, purple) fractions that sum to 1.
+    - -100  -> all red
+    -  -50  -> half red, half grey
+    -    0  -> all grey
+    -   25  -> 1/4 green, rest grey
+    -  100  -> all green
+    -  150  -> half green, half purple
+    -  200  -> all purple
     """
-    if affinity <= 0.0:
-        t = min(1.0, max(0.0, -affinity / 100.0))  # 0 at 0, 1 at -100
-        red = t
-        grey = 1.0 - t
-        return (red, grey, 0.0, 0.0)
+    a = max(-100, min(200, int(affinity)))
+    if a <= 0:
+        red = abs(a) / 100.0
+        grey = 1.0 - red
+        green = purple = 0.0
     else:
-        green = min(1.0, affinity / 100.0)         # 0..1 at 0..100
-        purple = min(1.0, max(0.0, (affinity - 100.0) / 100.0))  # 0..1 at 100..200
-        return (0.0, 0.0, green, purple)
+        green  = min(a, 100) / 100.0
+        purple = max(0, a - 100) / 100.0
+        grey   = max(0.0, 1.0 - green - purple)
+        red    = 0.0
+    return red, grey, green, purple
+
+
+def _filled_wedge(surf: pygame.Surface, center: tuple[int,int], radius: int,
+                  start_deg: float, sweep_deg: float, color: tuple[int,int,int]):
+    """
+    Draw a filled wedge by triangulating from the center.
+    start_deg is clockwise degrees, 0° at right; we'll rotate so -90° = top.
+    """
+    if sweep_deg <= 0: 
+        return
+    cx, cy = center
+    steps = max(8, int(abs(sweep_deg) / 4))  # quality vs perf
+    step = sweep_deg / steps
+    pts = [(cx, cy)]
+    for i in range(steps + 1):
+        a = math.radians(start_deg + i * step)
+        x = int(cx + radius * math.cos(a))
+        y = int(cy + radius * math.sin(a))
+        pts.append((x, y))
+    pygame.draw.polygon(surf, color, pts)
 
 # -------- Minimal mind type (imported by models) --------
 
 @dataclass
 class NPCMind:
-    disposition_base: int = 0               # -50..+50
+    disposition_base: int = 80               # -50..+50
     prefs: Set[str] = field(default_factory=set)
     affinity: float = 0.0                   # -100..+200
     is_dancing: bool = False
     last_match: float = 0.0
     last_heard_ms: int = 0
+
+    @property
+    def disposition(self) -> int:
+        """
+        Combine long-term baseline and live affinity.
+        Result is clamped to [-100, 200] for the groove meter & logic.
+        """
+        total = int(round(self.affinity)) + int(self.disposition_base)  # -100..+200 + (-50..+50)
+        return max(-100, min(200, total))
