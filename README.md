@@ -122,7 +122,7 @@ Each track has descriptors that determine:
 ### AI-Generated Content
 - Underground music is AI-generated from hidden prompts
 - Each track has unique descriptors and characteristics
-- Executive preferences match specific prompt words
+- NPC preferences match specific prompt words
 
 ## 🚨 Risk vs. Reward
 
