@@ -39,6 +39,7 @@ class AudioService:
         # --- listen mix (what the player hears) ---
         self.listen_mode = "env"         # "env" | "player" | "both"
         self.env_paused = False          # track pause state for env stream
+        self.env_enabled = True          # when False, do not start env playback even if loops ready
         # initial volumes for each mode (tweak or move to config)
         self._vol_env_only   = 1.0
         self._vol_dj_only    = 1.0
@@ -77,8 +78,9 @@ class AudioService:
         self.active_source = self._current_active_source()
         rt0 = self._get_runtime(self.active_source)
         if rt0.loop:
-            self.player.play_loop(rt0.loop.wav_path, rt0.loop.duration_sec, fade_ms=140)
-            self._on_env_playback_changed()
+            if self.env_enabled:
+                self.player.play_loop(rt0.loop.wav_path, rt0.loop.duration_sec, fade_ms=140)
+                self._on_env_playback_changed()
         else:
             # try preload for start zone, fall back to generate
             if not self._maybe_preload_start_zone():
@@ -111,6 +113,11 @@ class AudioService:
         self.player_track = None    # future: DAW/PlayerDeck sets this; for now None
         self.broadcast = BroadcastDJ(mixer_channel=3)
         self.broadcast.set_volume(0.8)
+        # Seed broadcast library with starting songs (two defaults from WorldModel)
+        try:
+            self.broadcast.load_library(self.m.player.inventory_songs)
+        except Exception:
+            pass
         
 
 
@@ -189,7 +196,7 @@ class AudioService:
                 loop = self._generate_for(src)
                 rt.loop = loop
                 # if the thing we just generated is the *currently audible* source, play it now
-                if src == self.active_source:
+                if src == self.active_source and self.env_enabled:
                     self.player.play_loop(loop.wav_path, loop.duration_sec, fade_ms=200)
                     self._on_env_playback_changed()
             except Exception as e:
@@ -348,8 +355,12 @@ class AudioService:
             if kind == "zone":
                 z = self.m.map.zones[idv]
                 if z.loop:
-                    self.recorder.start(z.loop.wav_path, z.loop.duration_sec,
-                                        {"zone": z.spec.name, "bpm": z.spec.bpm, "key": z.spec.key_mode, "mood": z.spec.mood})
+                    self.recorder.start(
+                        z.loop.wav_path,
+                        z.loop.duration_sec,
+                        {"zone": z.spec.name, "bpm": z.spec.bpm, "key": z.spec.key_mode, "mood": z.spec.mood},
+                        on_finish=self._on_recording_finished
+                    )
                     self.record_armed = False
             else:
                 p = self.m.map.pois[idv]
@@ -360,7 +371,8 @@ class AudioService:
                         p.loop.wav_path,
                         p.loop.duration_sec,
                         {"label": label, "bpm": self.m.map.zones[p.zone_id].spec.bpm,
-                         "key": self.m.map.zones[p.zone_id].spec.key_mode, "mood": "funky"}
+                         "key": self.m.map.zones[p.zone_id].spec.key_mode, "mood": "funky"},
+                        on_finish=self._on_recording_finished
                     )
                     self.record_armed = False
         elif self.recorder.is_recording() and self.auto_stop_at_end:
@@ -458,6 +470,29 @@ class AudioService:
     def toggle_broadcast(self):
         self.broadcast.toggle()
 
+    # ----- session inventory -----
+    def _on_recording_finished(self, out_path: str, meta: dict):
+        """Called by Recorder thread when a recording is saved.
+        Adds the new clip to the player's session inventory and refreshes broadcast library.
+        """
+        try:
+            title = str(meta.get("label") or meta.get("zone") or "Loop")
+            # Attempt to derive tags from the current audible loop at time of start (best-effort)
+            # Note: meta may not include tags; use env tags as a proxy.
+            tags = set()
+            try:
+                tags = self.current_env_tags()
+            except Exception:
+                tags = set()
+            from cosmic_underground.core.music import Song
+            song = Song(title=title, wav_path=out_path, keywords=tags, base_quality=0.0)
+            self.m.player.inventory_songs.append(song)
+            # Keep broadcast library in sync so prev/next controls work
+            self.broadcast.load_library(self.m.player.inventory_songs)
+        except Exception:
+            # Never crash on callback thread
+            pass
+
     # ===== listen/mix control =====
     def set_listen_mode(self, mode: str):
         if mode not in ("env", "player", "both"):
@@ -501,6 +536,25 @@ class AudioService:
         try:
             pygame.mixer.music.unpause()
             self.env_paused = False
+        except Exception:
+            pass
+
+    # Hard-disable/enable env playback starting (used when DAW is active)
+    def disable_env_playback(self):
+        """Prevent starting env audio and pause any current env music."""
+        self.env_enabled = False
+        try:
+            pygame.mixer.music.pause()
+            self.env_paused = True
+        except Exception:
+            pass
+
+    def enable_env_playback(self):
+        """Allow env audio to play again; ensure audible source plays if available."""
+        self.env_enabled = True
+        try:
+            self._ensure_audible_playing()
+            self.resume_env()
         except Exception:
             pass
 

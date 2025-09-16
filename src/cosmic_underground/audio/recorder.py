@@ -1,6 +1,6 @@
 import pygame, os, threading, re
 from cosmic_underground.core import config as C
-from typing import Optional, Tuple, Dict, List, Any
+from typing import Optional, Tuple, Dict, List, Any, Callable
 import time
 import wave
 import uuid
@@ -13,11 +13,13 @@ threading.excepthook = _thread_excepthook
 
 class Recorder:
     def __init__(self):
-        self.dir = os.path.abspath("./inventory")
+        # Use unified inventory directory from config
+        self.dir = os.fspath(C.INVENTORY)
         os.makedirs(self.dir, exist_ok=True)
         self.thread = None
         self.stop_flag = threading.Event()
         self.active_path = None
+        self._on_finish: Optional[Callable[[str, Dict], None]] = None
 
     @staticmethod
     def _safe_label(text: str, maxlen: int = 80) -> str:
@@ -36,10 +38,11 @@ class Recorder:
     def is_recording(self) -> bool:
         return self.thread is not None and self.thread.is_alive()
 
-    def start(self, loop_path: str, max_seconds: float, meta: Dict):
+    def start(self, loop_path: str, max_seconds: float, meta: Dict, on_finish: Optional[Callable[[str, Dict], None]] = None):
         if self.is_recording():
             return
         self.stop_flag.clear()
+        self._on_finish = on_finish
 
         # NEW: prefer 'label' if provided, else fall back to 'zone'
         raw_label = meta.get("label") or meta.get("zone") or "loop"
@@ -64,6 +67,12 @@ class Recorder:
                         dst.writeframes(data)
                         written += to_read
                 print(f"[REC] saved {out_path}")
+                # Notify listener (e.g., AudioService) so session inventory can update
+                try:
+                    if callable(self._on_finish):
+                        self._on_finish(out_path, dict(meta))
+                except Exception:
+                    pass
             except Exception as e:
                 error = f"{e.__class__.__name__}: {e}"
                 import traceback

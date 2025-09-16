@@ -13,7 +13,7 @@ from cosmic_underground.audio.service import AudioService
 from cosmic_underground.ui.view import GameView
 from cosmic_underground.minigames.dance.engine import DanceMinigame
 from cosmic_underground.core.affinity import update_npc_affinity, chebyshev
-
+from cosmic_underground.mixer.mixer_ui import Mixer
 
 def _print_inventory(inv_dir: str = "./inventory") -> None:
     import os
@@ -34,6 +34,8 @@ class GameController:
         pygame.init()
         pygame.display.set_caption("Alien DJ – Overworld")
         self.fullscreen = C.DEFAULT_FULLSCREEN
+        self._win_size = (C.SCREEN_W, C.SCREEN_H)   # <-- move up here
+        self._fs_last_toggle = 0     
         self.screen = self._apply_display_mode()
         self.clock = pygame.time.Clock()
 
@@ -50,11 +52,16 @@ class GameController:
 
         self.model.add_tile_changed_listener(lambda _old, _new: setattr(self, "show_prompt", False))
         pygame.key.set_repeat(250, 30)
+        # window/FS bookkeeping
 
         self.show_quest = False
         self.quest_text = ""
         if not hasattr(self.model, "active_quest"):
             self.model.active_quest = None
+        
+        # Mixer: pass a provider that returns the current session inventory (two defaults + recordings this session)
+        self.mixer = Mixer(inventory_provider=lambda: self.model.player.inventory_songs)
+
 
     @property
     def active_quest(self):
@@ -101,12 +108,38 @@ class GameController:
         return out
 
     def _apply_display_mode(self):
+        def _clamp(sz):
+            w, h = sz
+            return (max(int(w or 0), 640), max(int(h or 0), 360))
+
         if self.fullscreen:
-            screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+            info = pygame.display.Info()
+            size = (info.current_w, info.current_h)
+            screen = pygame.display.set_mode(size, pygame.FULLSCREEN)
         else:
-            screen = pygame.display.set_mode((C.SCREEN_W, C.SCREEN_H), pygame.RESIZABLE)
+            size = _clamp(self._win_size or (C.SCREEN_W, C.SCREEN_H))
+            screen = pygame.display.set_mode(size, pygame.RESIZABLE)
+
         C.SCREEN_W, C.SCREEN_H = screen.get_size()
         return screen
+
+    
+    def _toggle_fullscreen(self):
+        now = pygame.time.get_ticks()
+        if now - getattr(self, "_fs_last_toggle", 0) < 300:
+            return
+        self._fs_last_toggle = now
+
+        if not self.fullscreen:
+            try:
+                self._win_size = self.screen.get_size()
+            except Exception:
+                pass
+
+        self.fullscreen = not self.fullscreen
+        self.screen = self._apply_display_mode()
+
+
 
     def cycle_mood(self):
         order = ["calm", "energetic", "angry", "triumphant", "melancholy", "playful", "brooding", "gritty", "glittery", "funky"]
@@ -156,6 +189,12 @@ class GameController:
                 if e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
                     self.view.handle_music_widget_click(e.pos, self.audio)
 
+                if e.type == pygame.KEYDOWN:
+                    # Global fullscreen toggle (works in all modes)
+                    if (e.key in (pygame.K_F10, pygame.K_F11)) or (e.key == pygame.K_RETURN and (e.mod & pygame.KMOD_ALT)):
+                        self._toggle_fullscreen()
+                        continue
+
                 # ---- DANCE MODE ----
                 if self.mode == "dance":
                     if e.type in (pygame.KEYDOWN, pygame.KEYUP, self.audio.player.boundary_event):
@@ -165,9 +204,36 @@ class GameController:
                         self.mode = "overworld"
                     continue  # swallow events from overworld
 
+                # 3) DAW-mode frame branch
+                if self.mode == "mixer":
+                    # feed input to DAW first
+                    if e.type in (pygame.KEYDOWN, pygame.KEYUP, pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP, pygame.MOUSEWHEEL, pygame.MOUSEMOTION):
+                        if self.mixer.handle_event(e):
+                            continue
+                    # swallow ESC in DAW to get back
+                    if e.type == pygame.KEYDOWN and e.key in (pygame.K_ESCAPE,):
+                        try:
+                            self.mixer.engine.stop_all()
+                            self.mixer.transport.stop()
+                        except Exception:
+                            pass
+                        self.mode = "overworld"
+                        try:
+                            self.audio.enable_env_playback()
+                        except Exception:
+                            pass
+                        if hasattr(self, "_prev_broadcast_vol") and self._prev_broadcast_vol is not None:
+                            try:
+                                self.audio.broadcast.set_volume(self._prev_broadcast_vol)
+                            except Exception:
+                                pass
+                            self._prev_broadcast_vol = None
+                        continue
+
                 # ---- OVERWORLD ----
                 if e.type == pygame.VIDEORESIZE and not self.fullscreen:
-                    self.screen = pygame.display.set_mode((e.w, e.h), pygame.RESIZABLE)
+                    self._win_size = (max(e.w, 640), max(e.h, 360))
+                    self.screen = pygame.display.set_mode(self._win_size, pygame.RESIZABLE)
                     C.SCREEN_W, C.SCREEN_H = self.screen.get_size()
 
                 elif e.type == self.audio.player.boundary_event:
@@ -178,11 +244,10 @@ class GameController:
                         running = False
                         continue
 
-                    elif e.key == pygame.K_F11 or (e.key == pygame.K_RETURN and (e.mod & pygame.KMOD_ALT)):
-                        self.fullscreen = not self.fullscreen
-                        self.screen = self._apply_display_mode()
-
-                    elif e.key == pygame.K_n:
+                # toggle fullscreen on key UP to avoid key-repeat double toggles
+                if e.type == pygame.KEYDOWN:
+                                            
+                    if e.key == pygame.K_n:
                         self.show_panel = not self.show_panel
 
                     elif e.key == pygame.K_p:
@@ -210,6 +275,42 @@ class GameController:
                             self.model.map.pois[i].loop = None
                             self.audio.request_poi(i, priority=(0, 0, 0), force=True)
 
+                    elif e.key == pygame.K_TAB:
+                        # toggle DAW mode
+                        if self.mode == "mixer":
+                            # leaving mixer: stop DAW audio, resume env, restore broadcast volume
+                            try:
+                                self.mixer.engine.stop_all()
+                                self.mixer.transport.stop()
+                            except Exception:
+                                pass
+                            self.mode = "overworld"
+                            try:
+                                self.audio.enable_env_playback()
+                            except Exception:
+                                pass
+                            # restore broadcast volume if we muted it on entry
+                            if hasattr(self, "_prev_broadcast_vol") and self._prev_broadcast_vol is not None:
+                                try:
+                                    self.audio.broadcast.set_volume(self._prev_broadcast_vol)
+                                except Exception:
+                                    pass
+                                self._prev_broadcast_vol = None
+                        else:
+                            # entering mixer: pause/suppress env and mute broadcast so DAW audio is isolated
+                            self.mode = "mixer"
+                            try:
+                                self.audio.disable_env_playback()
+                            except Exception:
+                                pass
+                            try:
+                                self._prev_broadcast_vol = getattr(self.audio.broadcast, "volume", None)
+                                if self._prev_broadcast_vol is not None:
+                                    self.audio.broadcast.set_volume(0.0)
+                            except Exception:
+                                pass
+                        continue
+                    
                     elif e.key == pygame.K_k:
                         # Start dance mode on the current audible source if ready
                         k, i = self.audio.active_source
@@ -343,6 +444,15 @@ class GameController:
 
                     elif e.key == pygame.K_i:
                         _print_inventory("./inventory")
+
+            if self.mode == "mixer":
+                dt = self.clock.get_time()
+                self.mixer.update(dt)
+                self.mixer.draw(self.screen)
+                pygame.display.flip()
+                self.clock.tick(C.FPS)
+                continue
+
 
             # Movement only in overworld
             if self.mode != "dance":
