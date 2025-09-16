@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 @dataclass
 class Transport:
-    bpm: float = 110.0
+    bpm: float = 120.0
     timesig_n: int = 4
     timesig_d: int = 4
     playing: bool = False

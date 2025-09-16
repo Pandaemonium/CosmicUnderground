@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import sys
 import random
 from typing import List
@@ -14,6 +15,11 @@ from cosmic_underground.ui.view import GameView
 from cosmic_underground.minigames.dance.engine import DanceMinigame
 from cosmic_underground.core.affinity import update_npc_affinity, chebyshev
 from cosmic_underground.mixer.mixer_ui import Mixer
+from cosmic_underground.app.context import GameContext
+from cosmic_underground.app.states.game_state import GameState
+from cosmic_underground.app.states.overworld_state import OverworldState
+from cosmic_underground.app.states.mixer_state import MixerState
+from cosmic_underground.app.states.dance_state import DanceState
 
 def _print_inventory(inv_dir: str = "./inventory") -> None:
     import os
@@ -44,7 +50,19 @@ class GameController:
         self.view = GameView(self.model, self.audio)
 
         self.mode = "overworld"
+        # Game Modes / States
         self.dance = DanceMinigame(on_finish=self._on_dance_finish)
+        self.mixer = Mixer(inventory_provider=lambda: self.model.player.inventory_songs)
+
+        # Create the shared context
+        self.context = GameContext(
+            model=self.model,
+            audio=self.audio,
+            view=self.view,
+            mixer=self.mixer,
+            dance_minigame=self.dance,
+            controller=self
+        )
 
         self.show_prompt = False
         self.prompt_text = ""
@@ -61,6 +79,12 @@ class GameController:
         
         # Mixer: pass a provider that returns the current session inventory (two defaults + recordings this session)
         self.mixer = Mixer(inventory_provider=lambda: self.model.player.inventory_songs)
+        self.states = {
+            "overworld": OverworldState(self.context),
+            "mixer": MixerState(self.context),
+            "dance": DanceState(self.context),
+        }
+        self.active_state: GameState = self.states["overworld"]
 
 
     @property
@@ -74,6 +98,7 @@ class GameController:
     def _on_dance_finish(self, res):
         print(f"[DANCE] score={res.score} acc={res.accuracy:.2f} max_combo={res.max_combo} passed={res.passed}")
         self.mode = "overworld"
+        self.change_state("overworld")
         q = self.active_quest
         if res.passed and q:
             # Refactor-safe reward: mark quest complete; GameView should render the “complete” sprite.
@@ -83,13 +108,24 @@ class GameController:
             self.show_quest = True
             self.active_quest = None
 
+    def change_state(self, new_state_name: str, **kwargs):
+        if self.active_state:
+            self.active_state.on_exit()
+        
+        new_state = self.states.get(new_state_name)
+        if new_state:
+            self.active_state = new_state
+            self.active_state.on_enter(**kwargs)
+
     def _adjacent_pois(self) -> List[POI]:
         px, py = self.model.player.tile_x, self.model.player.tile_y
         dt = self.clock.get_time()
         
         # For now, NPCs react to *player* tags only if a player_track exists
+        # NPCs react to player tags if broadcasting is on
         p_tags = self.audio.current_player_tags()
         can_emit = self.audio.broadcast_on and bool(p_tags)
+        can_emit = self.audio.broadcast.is_playing() and bool(p_tags)
         
         for poi in self.model.map.pois.values():
             if poi.kind != "npc" or getattr(poi, "mind", None) is None:
@@ -194,6 +230,9 @@ class GameController:
                     if (e.key in (pygame.K_F10, pygame.K_F11)) or (e.key == pygame.K_RETURN and (e.mod & pygame.KMOD_ALT)):
                         self._toggle_fullscreen()
                         continue
+                
+                # --- Delegate event handling to the active state ---
+                self.active_state.handle_event(e)
 
                 # ---- DANCE MODE ----
                 if self.mode == "dance":
@@ -506,6 +545,10 @@ class GameController:
             # draw top-right music widget
             self.view.draw_music_widget(self.screen, self.audio)
 
+            # --- Delegate update and draw to the active state ---
+            dt = self.clock.get_time()
+            self.active_state.update(dt)
+            self.active_state.draw(self.screen)
             pygame.display.flip()
             self.clock.tick(C.FPS)
 
