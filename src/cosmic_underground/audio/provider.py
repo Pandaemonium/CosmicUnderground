@@ -1,11 +1,13 @@
 import os, math, uuid, time, tempfile, secrets
 import random
+import threading
 import numpy as np
 import soundfile as sf
 from typing import Optional, Tuple, Dict, List, Any
 
 from cosmic_underground.core import config as C
 from cosmic_underground.core.models import GeneratedLoop, ZoneSpec
+from cosmic_underground.core.logger import logger
 import promptgen
 
 
@@ -13,9 +15,7 @@ class LocalStableAudioProvider:
     def __init__(self, context_fn=None):
         try:
             import torch
-            from stable_audio_tools import get_pretrained_model
             self._torch = torch
-            self._get_pretrained_model = get_pretrained_model
         except Exception as e:
             raise RuntimeError(
                 "Stable Audio backend unavailable. In your venv:\n"
@@ -24,6 +24,9 @@ class LocalStableAudioProvider:
                 "  pip install torch --index-url https://download.pytorch.org/whl/cu121  (or cpu)"
             ) from e
 
+        self._torch = torch
+        from stable_audio_tools import get_pretrained_model
+        self._local = threading.local()
         os.environ.setdefault("OMP_NUM_THREADS", "2")
         self._torch.set_num_threads(max(1, os.cpu_count() // 2))
         self.device = (
@@ -31,11 +34,11 @@ class LocalStableAudioProvider:
             ("mps" if getattr(self._torch.backends, "mps", None)
                      and self._torch.backends.mps.is_available() else "cpu")
         )
+        
         print(f"[StableLocal] Loading model… (device={self.device})", flush=True)
-        self.model, self.cfg = self._get_pretrained_model("stabilityai/stable-audio-open-small")
+        self.model, self.cfg = get_pretrained_model("stabilityai/stable-audio-open-small")
         self.model = self.model.to(self.device).eval()
         self.sr_model = int(self.cfg["sample_rate"])
-        print(f"[StableLocal] Ready. sr={self.sr_model}", flush=True)
 
         self.tmpdir = tempfile.mkdtemp(prefix="alien_dj_local_")
         self.context_fn = (context_fn if callable(context_fn) else (lambda: {}))
@@ -44,6 +47,13 @@ class LocalStableAudioProvider:
     def _duration_for(bpm: int, bars: int, timesig: Tuple[int,int]) -> float:
         beats = bars * (timesig[0] if timesig and len(timesig) else 4)
         return beats * (60.0 / max(1, bpm))
+
+    def _get_thread_local_model(self):
+        """Each worker thread gets its own model instance."""
+        # The legacy provider used a single, shared model instance.
+        # This is generally not thread-safe for inference unless the model itself is stateless
+        # and the library handles internal locking, which stable-audio-tools seems to do.
+        return self.model, self.cfg, self.sr_model
 
     def _ensure_length(self, wav_np: np.ndarray, sr: int, seconds_total: float) -> np.ndarray:
         target = int(round(seconds_total * sr))
@@ -91,19 +101,22 @@ class LocalStableAudioProvider:
         if prepend:
             # Prepend bias tokens without blowing up length too much
             prompt = " ".join(prepend[:3]) + " " + prompt
+        
+        model, cfg, sr_model = self._get_thread_local_model()
 
         seconds_total = self._duration_for(bpm, bars, timesig)
         sample_size   = int(round(seconds_total * self.sr_model))
         seed = secrets.randbits(31)
-        print(f"[StableLocal] seed={seed} | '{getattr(spec_like, 'name', meta.get('zone_name','Zone'))}'", flush=True)
+        log_msg = f"tid={threading.get_ident()} seed={seed} prompt='{prompt}'"
+        logger.log(f"REQUEST: {log_msg}")
 
         t0 = time.time()
         with self._torch.inference_mode():
             audio = generate_diffusion_cond(
-                self.model,
+                model,
                 steps=8, cfg_scale=1.0, sampler_type="pingpong",
                 conditioning=[{"prompt": prompt, "seconds_total": seconds_total}],
-                sample_size=sample_size, device=self.device, seed=seed
+                sample_size=sample_size, device=self.device, seed=seed,
             )
         # (B, D, T) -> (T, D)
         audio = audio.squeeze(0).to(self._torch.float32).cpu().transpose(0,1).numpy().copy()
@@ -115,7 +128,8 @@ class LocalStableAudioProvider:
 
         out_path = os.path.join(self.tmpdir, f"{uuid.uuid4().hex}.wav")
         sf.write(out_path, audio, out_sr, subtype="PCM_16")
-        print(f"[StableLocal] gen in {time.time()-t0:.2f}s → {os.path.basename(out_path)}", flush=True)
+        gen_time = time.time() - t0
+        logger.log(f"SUCCESS: tid={threading.get_ident()} time={gen_time:.2f}s file='{os.path.basename(out_path)}'")
         return GeneratedLoop(
             out_path, duration_actual, bpm,
             getattr(spec_like, "key_mode", "Unknown"),

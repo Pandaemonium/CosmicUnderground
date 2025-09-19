@@ -1,7 +1,9 @@
 from cosmic_underground.controller import GameController
 
 def main():
+    import os
     import pygame
+    os.environ['SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS'] = '0'
     try:
         GameController().run()
     except SystemExit:

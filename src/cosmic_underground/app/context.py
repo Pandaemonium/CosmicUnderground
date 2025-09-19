@@ -12,13 +12,10 @@ if TYPE_CHECKING:
 
 
 class GameContext:
-    """
-    A container for shared game objects that various states need to access.
-    """
     def __init__(
         self,
-        model: WorldModel,
-        audio: AudioService,
+        model: "WorldModel",
+        audio: "AudioService",
         view: GameView,
         mixer: Mixer,
         dance_minigame: DanceMinigame,

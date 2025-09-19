@@ -32,4 +32,4 @@ PLAYER_SPRITE_COMPLETE = str(SPRITES / "laser_bunny.png")
 
 # Generation / cache
 MAX_ACTIVE_LOOPS = 120
-GEN_WORKERS = 1
+GEN_WORKERS = 2

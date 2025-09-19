@@ -1,6 +1,7 @@
 import os, threading, itertools, heapq
 import soundfile as sf
 from typing import Optional, Tuple, Dict, List, Any
+from cosmic_underground.core.logger import logger
 import random
 import threading, traceback
 import pygame
@@ -147,20 +148,23 @@ class AudioService:
 
     def _ensure_audible_playing(self):
         kind, idv = self.active_source
+        loop_to_play = None
         if kind == "zone":
             zr = self.m.map.zones[idv]
             if zr.loop:
-                self.player.play_loop(zr.loop.wav_path, zr.loop.duration_sec, cross_ms=220)
-                self._on_env_playback_changed()
+                loop_to_play = zr.loop
             else:
                 self.request_zone(idv, priority=(0,0), force=True)
         else:
             poi = self.m.map.pois[idv]
             if poi.loop:
-                self.player.play_loop(poi.loop.wav_path, poi.loop.duration_sec, cross_ms=220)
-                self._on_env_playback_changed()
+                loop_to_play = poi.loop
             else:
                 self.request_poi(idv, priority=(0,0), force=True)
+
+        if loop_to_play and self.player.current != loop_to_play.wav_path:
+            self.player.play_loop(loop_to_play.wav_path, loop_to_play.duration_sec, cross_ms=220)
+            self._on_env_playback_changed()
 
     # ---------- tasks ----------
     def request_zone(self, zid: int, priority: Optional[Tuple[int,int]]=None, force: bool=False):
@@ -172,13 +176,17 @@ class AudioService:
         self.request_generate(("poi", pid), priority=prio, force=force)
 
     def _pop_task(self):
-        with self._lock:
-            while self._heap:
-                prio, token, src = heapq.heappop(self._heap)
-                if self._pending.get(src) != token:
-                    continue  # stale
-                return prio, token, src
-        return None
+        try:
+            with self._lock:
+                while self._heap:
+                    prio, token, src = heapq.heappop(self._heap)
+                    # Check if the token is the latest one for this source.
+                    # This prevents processing stale, lower-priority requests.
+                    if self._pending.get(src) == token:
+                        return prio, token, src
+            return None
+        except IndexError: # Heap can be empty
+            return None
 
     # ---------- worker ----------
     def _worker_loop(self):
@@ -188,10 +196,14 @@ class AudioService:
             if item is None:
                 time.sleep(0.01); continue
             _, _, src = item
+            # logger.log(f"WORKER: Popped task {src}") # Too verbose for now
             rt = self._get_runtime(src)
             if rt.generating or rt.loop is not None:
+                # logger.log(f"WORKER: Skipping {src}, already generated or in progress.")
                 continue
-            rt.generating = True; rt.error = None
+            
+            rt.generating = True
+            rt.error = None
             try:
                 loop = self._generate_for(src)
                 rt.loop = loop
@@ -200,8 +212,7 @@ class AudioService:
                     self.player.play_loop(loop.wav_path, loop.duration_sec, fade_ms=200)
                     self._on_env_playback_changed()
             except Exception as e:
-                rt.error = f"{e.__class__.__name__}: {e}"
-                import traceback
+                rt.error = str(e)
                 print(f"[FATAL][GEN] src={src} in {__file__}::AudioService._worker_loop")
                 traceback.print_exc()  # <-- full file/line stack
             finally:
@@ -209,44 +220,36 @@ class AudioService:
             self._prune_cache()
 
     # ---------- priority ----------
-    def _priority_for_zone(self, zid: int) -> Tuple[int,int,int]:
-        """(tier, manhattan_dist_to_centroid, -recency) — here recency omitted for simplicity."""
-        px, py = self.m.player.tile_x, self.m.player.tile_y
-        kind, aid = self.active_source
-        tier = 3
-        if kind == "zone" and aid == zid: tier = 0
-        cx, cy = self.m.map.zones[zid].centroid
-        dist = int(abs(px - cx) + abs(py - cy))
-        # neighbors (by centroid approx) get tier 2
-        if tier != 0 and dist <= 4: tier = 2
-        return (tier, dist, 0)
-
-    def _priority_for_poi(self, pid: int) -> Tuple[int,int,int]:
-        px, py = self.m.player.tile_x, self.m.player.tile_y
-        poi = self.m.map.pois[pid]
-        kind, aid = self.active_source
-        tier = 3
-        if kind == "poi" and aid == pid: tier = 0
-        dist = abs(px - poi.tile[0]) + abs(py - poi.tile[1])
-        if tier != 0 and self._chebyshev((px,py), poi.tile) <= 1: tier = 1
-        return (tier, dist, -poi.rarity)
-    
     def _priority_for(self, src: Tuple[str,int]) -> Tuple[int,int]:
-        # tier 0: current active source
-        if src == self.active_source:
-            return (0, 0)
-        # tier 1: zones adjacent to player’s zone
+        """
+        Calculates the generation priority for a given audio source.
+        Lower numbers are higher priority.
+        Tier 0: Current audible POI.
+        Tier 1: Current audible Zone.
+        Tier 2: Adjacent POIs.
+        Tier 3: Adjacent Zones.
+        Tier 4: Backlog.
+        """
         px, py = self.m.player.tile_x, self.m.player.tile_y
-        cz = self.m.map.zone_of[px][py]
-        adj = set()
-        for (nx, ny) in ((px+1,py),(px-1,py),(px,py+1),(px,py-1)):
-            if 0 <= nx < self.m.map.w and 0 <= ny < self.m.map.h:
-                adj.add(self.m.map.zone_of[nx][ny])
-        if src[0] == "zone" and src[1] in adj:
-            # distance ~1 for all adjacent zones
-            return (1, 1)
-        # everything else
-        return (2, 99)
+
+        # Tier 0 & 1: current audible source
+        if src == self.active_source:
+           return (0, 0) if src[0] == 'poi' else (1, 0)
+
+        # Tier 2: POIs adjacent to player
+        if src[0] == 'poi':
+            poi = self.m.map.pois[src[1]]
+            dist = self._chebyshev((px, py), poi.tile)
+            if dist <= 1:
+                return (2, dist)
+
+        # Tier 3: Zones adjacent to player's current zone
+        current_zone_id = self.m.map.zone_of[px][py]
+        if src[0] == 'zone' and src[1] in self.m.map.neighbors.get(current_zone_id, set()):
+            return (3, 1)
+
+        # Tier 4: Backlog
+        return (4, 99)
         
     def _reprioritize_all(self):
         with self._lock:
@@ -254,6 +257,7 @@ class AudioService:
             self._heap.clear()
             self._pending.clear()
     
+
         # ensure active first
         rt = self._get_runtime(self.active_source)
         if rt.loop is None and not rt.generating:
@@ -270,11 +274,18 @@ class AudioService:
             if rt.loop is None and not rt.generating:
                 self.request_generate(("zone", zid), priority=(1,1), force=False)
     
+
         # backlog
         for src in items:
             rt = self._get_runtime(src)
             if rt.loop is None and not rt.generating:
                 self.request_generate(src, priority=self._priority_for(src), force=False)
+
+        # Ensure all POIs and zones are in the queue if they need generation
+        for zid in self.m.map.zones:
+            self.request_zone(zid)
+        for pid in self.m.map.pois:
+            self.request_poi(pid)
 
 
     # ---------- cache pruning ----------
@@ -382,19 +393,14 @@ class AudioService:
     def _current_active_source(self) -> Tuple[str, int]:
         px, py = self.m.player.tile_x, self.m.player.tile_y
         # find nearest POI with Chebyshev distance <= 1
-        best = None
-        best_d = 999
-        for pid, poi in self.m.map.pois.items():
-            dx = abs(poi.tile[0] - px)
-            dy = abs(poi.tile[1] - py)
-            d  = max(dx, dy)
-            if d <= 1:
-                # prefer NPC over object if tie; otherwise nearest
-                rank = (0 if poi.kind == "npc" else 1, d)
-                if best is None or rank < best_d:
-                    best = ("poi", pid)
-                    best_d = rank
-        if best: return best
+        nearby_pois = []
+        for poi in self.m.map.pois.values():
+            if self._chebyshev((px, py), poi.tile) <= 1:
+                # Sort by kind (npc > object), then rarity
+                nearby_pois.append(poi)
+        
+        best = min(nearby_pois, key=lambda p: (0 if p.kind == "npc" else 1, -p.rarity), default=None)
+        if best: return ("poi", best.pid)
         zid = self.m.map.zone_of[px][py]
         return ("zone", zid)
     
@@ -410,6 +416,7 @@ class AudioService:
         if not force and (rt.generating or rt.loop is not None or rt.error):
             return
         with self._lock:
+            # logger.log(f"QUEUE: Adding task {src} with priority {priority}") # Too verbose
             token = next(self._counter)
             self._pending[src] = token
             heapq.heappush(self._heap, (priority, token, src))
@@ -418,10 +425,13 @@ class AudioService:
         k, i = src
         if k == "zone":
             zr = self.m.map.zones[i]
+            logger.log(f"GEN_FOR: Generating for ZONE {i} with spec: {zr.spec.name}")
             return self.provider.generate(zr.spec)
         else:
             poi = self.m.map.pois[i]
             base = self.m.map.zones[poi.zone_id].spec
+            logger.log(f"GEN_FOR: Generating for POI {i} ('{poi.name}') based on zone '{base.name}'")
+
             bpm  = poi.bpm_hint or random.randint(96, 126)
             bars = poi.bars_hint or base.bars
             zspec = ZoneSpec(
@@ -433,6 +443,7 @@ class AudioService:
                 instruments=(base.instruments + (["rubber synth bass","clavinet","wah guitar"] if poi.kind=="npc" else ["mallets","resonant metal"])),
                 tags=list(set(base.tags + (["fast","layered"] if poi.kind=="npc" else ["retro","soft"]))),
             )
+            logger.log(f"GEN_FOR: POI spec override: {zspec}")
             return self.provider.generate(zspec, prepend=tokens_for_poi(poi))
     
     def _loop_tags(self, loop) -> set[str]:

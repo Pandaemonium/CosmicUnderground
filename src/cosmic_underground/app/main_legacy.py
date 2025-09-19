@@ -39,7 +39,7 @@ PLAYER_SPRITE_COMPLETE = "C:\Games\CosmicUnderground\sprites\laser_bunny.png"  #
 
 # Generation/caching
 MAX_ACTIVE_LOOPS = 120             # LRU cap
-GEN_WORKERS = 1                    # concurrent Stable Audio generations
+GEN_WORKERS = 2                    # concurrent Stable Audio generations
 
 
 
@@ -853,17 +853,18 @@ class AudioService:
         self.request_generate(("poi", pid), priority=prio, force=force)
 
     def _pop_task(self):
-        with self._lock:
-            while self._heap:
-                prio, token, src = heapq.heappop(self._heap)
-                if self._pending.get(src) != token:
-                    continue  # stale
-                return prio, token, src
-        return None
+        try:
+            with self._lock:
+                while self._heap:
+                    prio, token, src = heapq.heappop(self._heap)
+                    if self._pending.get(src) == token:
+                        return prio, token, src
+            return None
+        except IndexError:
+            return None
 
     # ---------- worker ----------
     def _worker_loop(self):
-        import time
         while not self._worker_stop:
             item = self._pop_task()
             if item is None:
@@ -910,21 +911,28 @@ class AudioService:
         return (tier, dist, -poi.rarity)
     
     def _priority_for(self, src: Tuple[str,int]) -> Tuple[int,int]:
-        # tier 0: current active source
-        if src == self.active_source:
-            return (0, 0)
-        # tier 1: zones adjacent to player’s zone
+        # Refined priority tiers
         px, py = self.m.player.tile_x, self.m.player.tile_y
-        cz = self.m.map.zone_of[px][py]
-        adj = set()
-        for (nx, ny) in ((px+1,py),(px-1,py),(px,py+1),(px,py-1)):
-            if 0 <= nx < self.m.map.w and 0 <= ny < self.m.map.h:
-                adj.add(self.m.map.zone_of[nx][ny])
-        if src[0] == "zone" and src[1] in adj:
-            # distance ~1 for all adjacent zones
-            return (1, 1)
-        # everything else
-        return (2, 99)
+        
+        # Tier 0: current audible source (POI is highest)
+        if src == self.active_source:
+            return (0, 0) if src[0] == 'poi' else (1, 0)
+
+        # Tier 2: POIs adjacent to player
+        if src[0] == 'poi':
+            poi = self.m.map.pois[src[1]]
+            dist = self._chebyshev((px, py), poi.tile)
+            if dist <= 1:
+                return (2, dist)
+
+        # Tier 3: Zones adjacent to player's current zone
+        current_zone_id = self.m.map.zone_of[px][py]
+        if src[0] == 'zone' and src[1] in self.m.map.neighbors.get(current_zone_id, set()):
+            return (3, 1)
+
+        # Tier 4: Backlog
+        return (4, 99)
+
         
     def _reprioritize_all(self):
         with self._lock:
